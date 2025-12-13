@@ -417,89 +417,93 @@ def measure_static_density(circuit, N_QUBITS):
     return results
 
 
-# --- 5. MAIN EXECUTION AND PLOTTING ---
-print("\n--- 5. MAIN EXECUTION AND PLOTTING ---")
+def main():
+    # --- 5. MAIN EXECUTION AND PLOTTING ---
+    print("\n--- 5. MAIN EXECUTION AND PLOTTING ---")
 
-# H = build_thirring_hamiltonian(N_QUBITS, MASS, COUPLING)
-# H_init = schwinger_hamiltonian(N_QUBITS, 1/2, MASS,
-#                           INITIAL_MASS, (COUPLING**2)*0.5, initial=False)
-H = schwinger_hamiltonian(N_QUBITS, 1/2, MASS,
-                          INITIAL_MASS, (COUPLING**2)*0.5, THETA, initial=False)
-print(f"Hamiltonian (N={N_QUBITS}, m={MASS}, g={COUPLING}):\n{H}")
+    # H = build_thirring_hamiltonian(N_QUBITS, MASS, COUPLING)
+    # H_init = schwinger_hamiltonian(N_QUBITS, 1/2, MASS,
+    #                           INITIAL_MASS, (COUPLING**2)*0.5, initial=False)
+    H = schwinger_hamiltonian(N_QUBITS, 1/2, MASS,
+                              INITIAL_MASS, (COUPLING**2)*0.5, THETA, initial=False)
+    print(f"Hamiltonian (N={N_QUBITS}, m={MASS}, g={COUPLING}):\n{H}")
 
-if len(sys.argv) < 2:
-    sys.argv.append("cache")
-if os.path.exists("cache/density_data.pkl") and sys.argv[1] != "new":
-    T, density_data, vacuum_densities = pickle.load(
-        open("cache/density_data.pkl", "rb"))
-else:
-    U_ground = vqe_ground_state(H)
-    vacuum_densities = measure_static_density(U_ground, N_QUBITS)
-    U_wavepacket = wave_packet_preparation(
-        N_QUBITS, packet_width_sigma=1.0, momentum_k_magnitude=5 * 2 * np.pi / N_QUBITS)
-    T, density_data = simulate_scattering(H, U_ground, U_wavepacket)
-    os.makedirs("cache", exist_ok=True)
-    pickle.dump((T, density_data, vacuum_densities),
-                open("cache/density_data.pkl", "wb"))
+    if len(sys.argv) < 2:
+        sys.argv.append("cache")
+    if os.path.exists("cache/density_data.pkl") and sys.argv[1] != "new":
+        T, density_data, vacuum_densities = pickle.load(
+            open("cache/density_data.pkl", "rb"))
+    else:
+        U_ground = vqe_ground_state(H)
+        vacuum_densities = measure_static_density(U_ground, N_QUBITS)
+        U_wavepacket = wave_packet_preparation(
+            N_QUBITS, packet_width_sigma=1.0, momentum_k_magnitude=5 * 2 * np.pi / N_QUBITS)
+        T, density_data = simulate_scattering(H, U_ground, U_wavepacket)
+        os.makedirs("cache", exist_ok=True)
+        pickle.dump((T, density_data, vacuum_densities),
+                    open("cache/density_data.pkl", "wb"))
+
+    # Plotting the results
+    plt.figure(figsize=(10, 6))
+    for key, values in density_data.items():
+        site_index = int(key.split('_')[-1])
+        # Even sites (0, 2, ...) correspond to particles; Odd sites (1, 3, ...) correspond to antiparticles.
+        label_text = f'Site n={
+            site_index} ({"Particle" if site_index % 2 == 0 else "Antiparticle"})'
+        plt.plot(T, values, label=label_text, marker='o', markersize=3)
+
+    plt.xlabel('Time (t)')
+    plt.ylabel('Particle Density $\\langle n_j \\rangle$')
+    plt.title(f'Fermion Site Scattering (N={N_QUBITS}, g={
+              COUPLING}, Trotter Steps={TROTTER_STEPS} per unit time)')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.6)
+
+    delta_density = np.zeros((N_QUBITS, T.shape[0]))
+    new_density_data = np.zeros((N_QUBITS, T.shape[0]))
+    for rawkey, value in density_data.items():
+        density_data[rawkey] = np.array(value)
+        key = int(rawkey.split('_')[-1])
+        new_density_data[key] = density_data[rawkey]
+        vac_dens = vacuum_densities[rawkey]
+        delta_density[key] = density_data[rawkey] - vac_dens
+
+    site_indices = np.arange(N_QUBITS)
+    plt.figure(figsize=(10, 6))
+    plt.bar(site_indices, delta_density.T[0], color='skyblue')
+    plt.xlabel('Site Index')
+    plt.ylabel('Initial Particle Density $\\langle n_j \\rangle_{t=0}$')
+    plt.title(f'Initial State Particle Density (t=0) (N={N_QUBITS})')
+    plt.xticks(site_indices)
+    plt.grid(True, axis='y', linestyle='--', alpha=0.6)
+    plt.tight_layout()
+
+    fig, ax = plt.subplots(figsize=(8, 10))
+
+    im = ax.imshow(
+        delta_density.T,
+        origin='lower',
+        aspect='auto',
+        cmap='seismic',
+        interpolation='none',
+        vmin=-1,
+        vmax=1,
+        extent=[-0.5, N_QUBITS - 0.5, T[0], T[-1]]
+    )
+
+    ax.set_xlabel('Site Index $n$')
+    ax.set_ylabel('Time $t$')
+    ax.set_title(f'Fermion Site Density ($\Delta \\langle n_j \\rangle_t$) \n Schwinger Model (N={
+                 N_QUBITS}, m={MASS}, $g={COUPLING}$)')
+
+    ax.set_xticks(np.arange(0, N_QUBITS, 1))
+
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label('$\\Delta \\langle n_j \\rangle_t$')
+
+    plt.tight_layout()
+    plt.show()
 
 
-# Plotting the results
-plt.figure(figsize=(10, 6))
-for key, values in density_data.items():
-    site_index = int(key.split('_')[-1])
-    # Even sites (0, 2, ...) correspond to particles; Odd sites (1, 3, ...) correspond to antiparticles.
-    label_text = f'Site n={
-        site_index} ({"Particle" if site_index % 2 == 0 else "Antiparticle"})'
-    plt.plot(T, values, label=label_text, marker='o', markersize=3)
-
-plt.xlabel('Time (t)')
-plt.ylabel('Particle Density $\\langle n_j \\rangle$')
-plt.title(f'Fermion Site Scattering (N={N_QUBITS}, g={
-          COUPLING}, Trotter Steps={TROTTER_STEPS} per unit time)')
-plt.legend()
-plt.grid(True, linestyle='--', alpha=0.6)
-
-delta_density = np.zeros((N_QUBITS, T.shape[0]))
-new_density_data = np.zeros((N_QUBITS, T.shape[0]))
-for rawkey, value in density_data.items():
-    density_data[rawkey] = np.array(value)
-    key = int(rawkey.split('_')[-1])
-    new_density_data[key] = density_data[rawkey]
-    vac_dens = vacuum_densities[rawkey]
-    delta_density[key] = density_data[rawkey] - vac_dens
-
-site_indices = np.arange(N_QUBITS)
-plt.figure(figsize=(10, 6))
-plt.bar(site_indices, delta_density.T[0], color='skyblue')
-plt.xlabel('Site Index')
-plt.ylabel('Initial Particle Density $\\langle n_j \\rangle_{t=0}$')
-plt.title(f'Initial State Particle Density (t=0) (N={N_QUBITS})')
-plt.xticks(site_indices)
-plt.grid(True, axis='y', linestyle='--', alpha=0.6)
-plt.tight_layout()
-
-fig, ax = plt.subplots(figsize=(8, 10))
-
-im = ax.imshow(
-    delta_density.T,
-    origin='lower',
-    aspect='auto',
-    cmap='seismic',
-    interpolation='none',
-    vmin=-1,
-    vmax=1,
-    extent=[-0.5, N_QUBITS - 0.5, T[0], T[-1]]
-)
-
-ax.set_xlabel('Site Index $n$')
-ax.set_ylabel('Time $t$')
-ax.set_title(f'Fermion Site Density ($\Delta \\langle n_j \\rangle_t$) \n Schwinger Model (N={
-             N_QUBITS}, m={MASS}, $g={COUPLING}$)')
-
-ax.set_xticks(np.arange(0, N_QUBITS, 1))
-
-cbar = fig.colorbar(im, ax=ax)
-cbar.set_label('$\\Delta \\langle n_j \\rangle_t$')
-
-plt.tight_layout()
-plt.show()
+if __name__ == "__main__":
+    main()
