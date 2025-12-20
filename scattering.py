@@ -220,14 +220,16 @@ def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.p
     wp_circuit = QuantumCircuit(N)
 
     import math
-    center_left_idx = math.floor((N-1) * 0.25)  # e.g., N=4 -> 1, N=8 -> 2
-    if center_left_idx % 2 != 0:
-        center_left_idx += 1
-    center_right_idx = math.ceil((N-1) * 0.75)  # e.g., N=4 -> 3, N=8 -> 6
-    if center_right_idx % 2 == 0:
-        center_right_idx -= 1
-    if center_left_idx == center_right_idx:
-        center_right_idx = N - 1 if center_left_idx == 0 else center_left_idx + 1
+    # center_left_idx = math.floor((N-1) * 0.25)  # e.g., N=4 -> 1, N=8 -> 2
+    # if center_left_idx % 2 != 0:
+    #     center_left_idx += 1
+    # center_right_idx = math.ceil((N-1) * 0.75)  # e.g., N=4 -> 3, N=8 -> 6
+    # if center_right_idx % 2 == 0:
+    #     center_right_idx -= 1
+    # if center_left_idx == center_right_idx:
+    #     center_right_idx = N - 1 if center_left_idx == 0 else center_left_idx + 1
+    center_left_idx = 1
+    center_right_idx = 6
 
     print(f"Packet 1 centered at site {
           center_left_idx} with +k. Packet 2 centered at site {center_right_idx} with -k.")
@@ -252,21 +254,23 @@ def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.p
     print(f"amps_packet2: {amps_packet2}")
 
     for n in range(N):
+        # Superposition of two wave packets with opposite momenta
+        # Packet 1: moving right (+k)
+        psi1 = amps_packet1[n] * np.exp(1j * momentum_k_magnitude * n)
+        # Packet 2: moving left (-k)
+        psi2 = amps_packet2[n] * np.exp(1j * -momentum_k_magnitude * n)
 
-        combined_gaussian_value = amps_packet1[n] + amps_packet2[n]
+        psi_total = psi1 + psi2
 
-        ry_angle = np.pi * (combined_gaussian_value / max_ry_scaling)
-
+        # Magnitude determines population (Ry rotation)
+        combined_amplitude = np.abs(psi_total)
+        ry_angle = np.pi * (combined_amplitude / max_ry_scaling)
         wp_circuit.ry(ry_angle, n)
 
-        k_val = 0.0
-        if amps_packet1[n] > 1e-9:
-            k_val = momentum_k_magnitude
-        elif amps_packet2[n] > 1e-9:
-            k_val = -momentum_k_magnitude
-
-        if k_val != 0:
-            wp_circuit.rz(k_val * n, n)
+        # Phase determines momentum (Rz rotation)
+        # Rz(phi) imparts a relative phase e^{i*phi} to the |1> state
+        phi = np.angle(psi_total)
+        wp_circuit.rz(phi, n)
     # wp_circuit.x(center_left_idx)
     # wp_circuit.x(center_right_idx)
 
