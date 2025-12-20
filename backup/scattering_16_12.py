@@ -36,7 +36,7 @@ THETA = 0
 time_param = Parameter('t')
 
 
-def schwinger_hamiltonian(N, w, m, m0, J, theta) -> SparsePauliOp:
+def schwinger_hamiltonian(N, w, m, m0, J, theta, initial=False) -> SparsePauliOp:
     """
     Generates the Pauli string terms for the U(1) Schwinger model Hamiltonian in 1+1D
     after Jordan-Wigner and gauge-field elimination, returning them as a Qiskit SparsePauliOp.
@@ -96,12 +96,13 @@ def schwinger_hamiltonian(N, w, m, m0, J, theta) -> SparsePauliOp:
             print(f"Skipping term due to index error: {e}")
 
     # --- 1. Hopping Term (H_+-) ---
-    coeff_w = w
-    for n in range(N - 1):
-        coeff = 0.5 * (coeff_w - ((-1.0)**(n+1) * m * np.sin(theta) * 0.5))
-        # print(coeff)
-        add_term(coeff, [('X', n), ('X', n + 1)])
-        add_term(coeff, [('Y', n), ('Y', n + 1)])
+    if not initial:
+        coeff_w = w
+        for n in range(N - 1):
+            coeff = 0.5 * (coeff_w - ((-1.0)**(n+1) * m * np.sin(theta) * 0.5))
+            # print(coeff)
+            add_term(coeff, [('X', n), ('X', n + 1)])
+            add_term(coeff, [('Y', n), ('Y', n + 1)])
 
     # --- 2. Mass Term and Field Term (H_Z) ---
     coeff_mass = m
@@ -200,7 +201,7 @@ def vqe_ground_state(hamiltonian):
     return ground_state_circuit
 
 
-def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.pi/4):
+def wave_packet_preparation(N, packet_width_sigma, momentum_k_magnitude, MASS=1.0):
     """
     Creates a quantum circuit preparing two Gaussian wave packets with opposing momenta.
     Packet 1 (left side) has +momentum_k_magnitude.
@@ -218,7 +219,6 @@ def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.p
     print(f"\n--- 3. Initial Wave Packet Preparation (Gaussian): sigma={
           packet_width_sigma}, k_magnitude={momentum_k_magnitude:.2f} ---")
     wp_circuit = QuantumCircuit(N)
-
     import math
     center_left_idx = math.floor((N-1) * 0.25)  # e.g., N=4 -> 1, N=8 -> 2
     if center_left_idx % 2 != 0:
@@ -226,49 +226,60 @@ def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.p
     center_right_idx = math.ceil((N-1) * 0.75)  # e.g., N=4 -> 3, N=8 -> 6
     if center_right_idx % 2 == 0:
         center_right_idx -= 1
-    if center_left_idx == center_right_idx:
-        center_right_idx = N - 1 if center_left_idx == 0 else center_left_idx + 1
+    particle_num = 2
 
-    print(f"Packet 1 centered at site {
-          center_left_idx} with +k. Packet 2 centered at site {center_right_idx} with -k.")
+    start_index = -math.floor(N / 4)
+    stop_index = math.ceil(N / 4)
+    indices = np.arange(start_index, stop_index)
+    scaling_factor = (2 * np.pi) / N
+    k_array = scaling_factor * indices
 
-    # Calculate Gaussian amplitudes for each packet across all sites
-    amps_packet1 = np.array(
-        [np.exp(-(n - center_left_idx)**2 / (2 * packet_width_sigma**2)) for n in range(N)])
-    # for n in range(0, N, 2):
-    #     amps_packet1[n] = 0
-    # amps_packet1 = np.array([0 for n in range(N)])
-    amps_packet2 = np.array(
-        [np.exp(-(n - center_right_idx)**2 / (2 * packet_width_sigma**2)) for n in range(N)])
-    # for n in range(1, N, 2):
-    #     amps_packet2[n] = 0
-    # amps_packet2 = np.array([0 for n in range(N)])
+    def projector(n, l):
+        return (1+((-1)**(n+l)))/2
 
-    # Determine a normalization factor for Ry angles. Max possible combined amplitude is 2.0.
-    # We map this to an Ry angle of pi (full flip from |0> to |1>).
-    max_ry_scaling = 2.0
+    def wave_packet_particle_coeff(N, n, k_array, average_position, average_momentum, sigma, anti=False):
+        momentum_coeffs = np.zeros(k_array.shape, dtype=complex)
+        for i, k in enumerate(k_array):
+            momentum_coeffs[i] = np.exp(-1j * k * average_position) * np.exp(-(
+                k-average_momentum) ** 2 / (4 * sigma**2))
 
-    print(f"amps_packet1: {amps_packet1}")
-    print(f"amps_packet2: {amps_packet2}")
+        k_norm = 0
+        for k in momentum_coeffs:
+            k_norm += np.abs(k)**2
+        momentum_coeffs *= 1 / np.sqrt(k_norm)
 
-    for n in range(N):
+        phi_n_not_normal = 0
+        for k, phi_k in zip(k_array, momentum_coeffs):
+            w_k = np.sqrt(MASS**2 + np.sin(k)**2)
+            v_k = np.sin(k) / (MASS + w_k)
+            if anti:
+                temp = phi_k * np.sqrt((MASS + w_k)/w_k) * np.exp(1j * k * n) * \
+                    (projector(n, 1) + v_k * projector(n, 0))
+            else:
+                temp = phi_k * np.sqrt((MASS + w_k)/w_k) * np.exp(1j * k * n) * \
+                    (projector(n, 0) + v_k * projector(n, 1))
+            phi_n_not_normal += temp
+        phi_n = phi_n_not_normal / np.sqrt(N)
 
-        combined_gaussian_value = amps_packet1[n] + amps_packet2[n]
+        return phi_n
 
-        ry_angle = np.pi * (combined_gaussian_value / max_ry_scaling)
+    def create_wave_packet(N, k_array, average_position, average_momentum, sigma, circ, anti=False):
+        for n in range(N):
+            phi_n = wave_packet_particle_coeff(
+                N, n, k_array, average_position, average_momentum, sigma, anti=anti)
 
-        wp_circuit.ry(ry_angle, n)
+            for l in range(n):
+                circ.rz(-1 * phi_n, l)
+            circ.ry(1/2 * phi_n, n)
+            circ.ry(-1/2 * phi_n, n)
 
-        k_val = 0.0
-        if amps_packet1[n] > 1e-9:
-            k_val = momentum_k_magnitude
-        elif amps_packet2[n] > 1e-9:
-            k_val = -momentum_k_magnitude
+    create_wave_packet(N=N, k_array=k_array, average_position=center_left_idx,
+                       average_momentum=momentum_k_magnitude, sigma=packet_width_sigma, circ=wp_circuit)
+    create_wave_packet(N=N, k_array=k_array, average_position=center_right_idx,
+                       average_momentum=-momentum_k_magnitude, sigma=packet_width_sigma, circ=wp_circuit, anti=True)
 
-        if k_val != 0:
-            wp_circuit.rz(k_val * n, n)
-    # wp_circuit.x(center_left_idx)
-    # wp_circuit.x(center_right_idx)
+    # wp_circuit.draw('mpl')
+    # plt.show()
 
     wp_circuit.barrier(label='Gaussian Wave Packet Prep')
     return wp_circuit
@@ -373,8 +384,11 @@ def main():
     # --- 5. MAIN EXECUTION AND PLOTTING ---
     print("\n--- 5. MAIN EXECUTION AND PLOTTING ---")
 
+    # H = build_thirring_hamiltonian(N_QUBITS, MASS, COUPLING)
+    # H_init = schwinger_hamiltonian(N_QUBITS, 1/2, MASS,
+    #                           INITIAL_MASS, (COUPLING**2)*0.5, initial=False)
     H = schwinger_hamiltonian(N_QUBITS, 1/2, MASS,
-                              INITIAL_MASS, (COUPLING**2)*0.5, THETA)
+                              INITIAL_MASS, (COUPLING**2)*0.5, THETA, initial=False)
     print(f"Hamiltonian (N={N_QUBITS}, m={MASS}, g={COUPLING}):\n{H}")
 
     if len(sys.argv) < 2:
@@ -386,27 +400,11 @@ def main():
         U_ground = vqe_ground_state(H)
         vacuum_densities = measure_static_density(U_ground, N_QUBITS)
         U_wavepacket = wave_packet_preparation(
-            N_QUBITS, packet_width_sigma=0.8, momentum_k_magnitude=5 * 2 * np.pi / N_QUBITS)
+            N_QUBITS, packet_width_sigma=2 * np.pi / (1 * N_QUBITS), momentum_k_magnitude=5 * 2 * np.pi / (1 * N_QUBITS), MASS=MASS)
         T, density_data = simulate_scattering(H, U_ground, U_wavepacket)
         os.makedirs("cache", exist_ok=True)
         pickle.dump((T, density_data, vacuum_densities),
                     open("cache/density_data.pkl", "wb"))
-
-    # Plotting the results
-    plt.figure(figsize=(10, 6))
-    for key, values in density_data.items():
-        site_index = int(key.split('_')[-1])
-        # Even sites (0, 2, ...) correspond to particles; Odd sites (1, 3, ...) correspond to antiparticles.
-        label_text = f'Site n={
-            site_index} ({"Particle" if site_index % 2 == 0 else "Antiparticle"})'
-        plt.plot(T, values, label=label_text, marker='o', markersize=3)
-
-    plt.xlabel('Time (t)')
-    plt.ylabel('Particle Density $\\langle n_j \\rangle$')
-    plt.title(f'Fermion Site Scattering (N={N_QUBITS}, g={
-              COUPLING}, Trotter Steps={TROTTER_STEPS} per unit time)')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
 
     delta_density = np.zeros((N_QUBITS, T.shape[0]))
     new_density_data = np.zeros((N_QUBITS, T.shape[0]))
@@ -416,6 +414,28 @@ def main():
         new_density_data[key] = density_data[rawkey]
         vac_dens = vacuum_densities[rawkey]
         delta_density[key] = density_data[rawkey] - vac_dens
+
+    # Plotting the results
+    # plt.figure(figsize=(10, 6))
+    # for key, values in density_data.items():
+    #     site_index = int(key.split('_')[-1])
+    #     # Even sites (0, 2, ...) correspond to particles; Odd sites (1, 3, ...) correspond to antiparticles.
+    #     label_text = f'Site n={
+    #         site_index} ({"Particle" if site_index % 2 == 0 else "Antiparticle"})'
+    #     plt.plot(T, values, label=label_text, marker='o', markersize=3)
+
+    plt.figure(figsize=(10, 6))
+    for i, values in enumerate(delta_density):
+        label_text = f'Site n={
+            i} ({"Particle" if i % 2 == 0 else "Antiparticle"})'
+        plt.plot(T, values, label=label_text, marker='o', markersize=3)
+
+    plt.xlabel('Time (t)')
+    plt.ylabel('Particle Density $\\langle n_j \\rangle$')
+    plt.title(f'Fermion Site Scattering (N={N_QUBITS}, g={
+              COUPLING}, Trotter Steps={TROTTER_STEPS} per unit time)')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.6)
 
     site_indices = np.arange(N_QUBITS)
     plt.figure(figsize=(10, 6))
@@ -442,8 +462,8 @@ def main():
 
     ax.set_xlabel('Site Index $n$')
     ax.set_ylabel('Time $t$')
-    ax.set_title(f'Fermion Site Density ($\Delta \\langle n_j \\rangle_t$) \n Schwinger Model (N={
-                 N_QUBITS}, m={MASS}, g={COUPLING}, $\\theta={THETA}$)')
+    ax.set_title(
+        f'Fermion Site Density ($\Delta \\langle n_j \\rangle_t$) \n Schwinger Model (N={N_QUBITS}, m={MASS}, $g={COUPLING}$)')
 
     ax.set_xticks(np.arange(0, N_QUBITS, 1))
 
