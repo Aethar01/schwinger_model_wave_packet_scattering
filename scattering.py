@@ -4,7 +4,7 @@ from collections import defaultdict
 from qiskit.circuit import QuantumCircuit, Parameter
 from qiskit_algorithms.optimizers import COBYLA
 from qiskit_algorithms.minimum_eigensolvers import VQE
-from qiskit.circuit.library import efficient_su2, PauliEvolutionGate
+from qiskit.circuit.library import efficient_su2, PauliEvolutionGate, hamiltonian_variational_ansatz
 from qiskit.primitives import StatevectorEstimator
 from qiskit.quantum_info import SparsePauliOp
 import sys
@@ -187,14 +187,51 @@ def build_thirring_hamiltonian(N, m, g):
 def vqe_ground_state(hamiltonian):
     """ Performs VQE to find the ground state of the Hamiltonian. """
     print("--- 2. VQE Ground State Preparation ---")
-    ansatz = efficient_su2(N_QUBITS, entanglement='linear', reps=2)
+
+    initial_layer = QuantumCircuit(N_QUBITS)
+    for i in range(N_QUBITS):
+        if i % 2 == 0:
+            initial_layer.x(i)
+
+    # ansatz_su2 = efficient_su2(N_QUBITS, entanglement='reverse_linear', reps=2)
+    ansatz_HVA = hamiltonian_variational_ansatz(hamiltonian, reps=2)
+    ansatz = initial_layer.compose(ansatz_HVA)
+
     # optimizer = SPSA(maxiter=1000)
-    optimizer = COBYLA(maxiter=1000)
+    optimizer = COBYLA(maxiter=3000)
     estimator = StatevectorEstimator()
-    vqe = VQE(estimator, ansatz, optimizer=optimizer)
+
+    # Capture energy values for plotting
+    energy_values = []
+
+    def callback(eval_count, parameters, mean, std):
+        energy_values.append(mean)
+        print(f"VQE Iteration {eval_count}: Energy = {mean:.5f}", end="\r")
+
+    vqe = VQE(estimator, ansatz, optimizer=optimizer, callback=callback)
     vqe_result = vqe.compute_minimum_eigenvalue(hamiltonian)
-    print(f"VQE Result: Ground State Energy = {
+    print(f"\nVQE Result: Ground State Energy = {
           vqe_result.eigenvalue.real:.4f}")
+    H_matrix = hamiltonian.to_matrix(sparse=False)
+    from scipy.linalg import eigh
+    eigenvalues = eigh(H_matrix, eigvals_only=True)
+    E_exact = np.min(eigenvalues).real
+    print(f"Exact Ground State Energy from Diagonalization = {E_exact:.4f}")
+
+    # Plotting VQE Convergence
+    plt.figure(figsize=(6, 6))
+    plt.plot(energy_values, label='VQE Energy')
+    plt.axhline(y=E_exact, color='r', linestyle='--',
+                label=f'Exact Energy = {E_exact:.4f}')
+    plt.xlabel('Optimization Cycles')
+    plt.ylabel('Energy')
+    # plt.title('VQE Energy Convergence')
+    plt.legend()
+    # plt.grid(True)
+    plt.show()
+    # plt.savefig('vqe_convergence.png')
+    # print("VQE convergence plot saved to 'vqe_convergence.png'")
+
     ground_state_circuit = ansatz.assign_parameters(
         vqe_result.optimal_parameters)
     return ground_state_circuit
@@ -202,79 +239,123 @@ def vqe_ground_state(hamiltonian):
 
 def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.pi/4):
     """
-    Creates a quantum circuit preparing two Gaussian wave packets with opposing momenta.
-    Packet 1 (left side) has +momentum_k_magnitude.
-    Packet 2 (right side) has -momentum_k_magnitude.
-
+    Creates a quantum circuit preparing two Gaussian wave packets with opposing momenta
+    using the coefficients derived from the free theory analytical solution (Eq. 13 in paper).
     Args:
         N (int): Number of qubits/lattice sites.
-        packet_width_sigma (float): Standard deviation of the Gaussian spatial distribution.
-        momentum_k_magnitude (float): Magnitude of the momentum for each packet.
-                                      Left packet gets +k, right packet gets -k.
-
+        packet_width_sigma (float): Width parameter. 
+                                    Note: Paper uses sigma_k. We assume input is spatial sigma, so sigma_k ~ 1/sigma.
+                                    Or we follow the paper's example sigma_k = 2pi/N.
+        momentum_k_magnitude (float): Momentum k.
     Returns:
         QuantumCircuit: A circuit preparing the initial wave packet state.
     """
-    print(f"\n--- 3. Initial Wave Packet Preparation (Gaussian): sigma={
-          packet_width_sigma}, k_magnitude={momentum_k_magnitude:.2f} ---")
+
+    print(f"\n--- 3. Initial Wave Packet Preparation (Analytic Coeffs): sigma={
+          packet_width_sigma}, k={momentum_k_magnitude:.2f} ---")
     wp_circuit = QuantumCircuit(N)
-
-    import math
-    # center_left_idx = math.floor((N-1) * 0.25)  # e.g., N=4 -> 1, N=8 -> 2
-    # if center_left_idx % 2 != 0:
-    #     center_left_idx += 1
-    # center_right_idx = math.ceil((N-1) * 0.75)  # e.g., N=4 -> 3, N=8 -> 6
-    # if center_right_idx % 2 == 0:
-    #     center_right_idx -= 1
-    # if center_left_idx == center_right_idx:
-    #     center_right_idx = N - 1 if center_left_idx == 0 else center_left_idx + 1
-    center_left_idx = 1
-    center_right_idx = 6
-
-    print(f"Packet 1 centered at site {
-          center_left_idx} with +k. Packet 2 centered at site {center_right_idx} with -k.")
-
-    # Calculate Gaussian amplitudes for each packet across all sites
-    amps_packet1 = np.array(
-        [np.exp(-(n - center_left_idx)**2 / (2 * packet_width_sigma**2)) for n in range(N)])
-    # for n in range(0, N, 2):
-    #     amps_packet1[n] = 0
-    # amps_packet1 = np.array([0 for n in range(N)])
-    amps_packet2 = np.array(
-        [np.exp(-(n - center_right_idx)**2 / (2 * packet_width_sigma**2)) for n in range(N)])
-    # for n in range(1, N, 2):
-    #     amps_packet2[n] = 0
-    # amps_packet2 = np.array([0 for n in range(N)])
-
-    # Determine a normalization factor for Ry angles. Max possible combined amplitude is 2.0.
-    # We map this to an Ry angle of pi (full flip from |0> to |1>).
-    max_ry_scaling = 2.0
-
-    print(f"amps_packet1: {amps_packet1}")
-    print(f"amps_packet2: {amps_packet2}")
-
+    # Packet Centers (Position space)
+    mu_n_c = int(N * 0.25)
+    if mu_n_c % 2 != 0:
+        mu_n_c += 1
+    mu_n_d = int(N * 0.75)
+    if mu_n_d % 2 == 0:
+        mu_n_d -= 1
+    # Momentum space grid
+    # k in 2pi/N * {-N/2, ..., N/2 - 1}
+    # Range of integer indices for k
+    k_indices = np.arange(-int(N/2), int(N/2))
+    k_values = 2 * np.pi / N * k_indices
+    # Momentum width
+    # If packet_width_sigma is spatial width, sigma_k = 1/packet_width_sigma
+    # Paper uses sigma_k = 2pi/N for their plots.
+    sigma_k = 1.0 / packet_width_sigma
+    # --- Calculate Momentum Space Coefficients (Eq 7) ---
+    # Particle (c) centered at +k, position mu_n_c
+    phi_c_k = np.exp(-1j * k_values * mu_n_c) * \
+        np.exp(-(k_values - momentum_k_magnitude)**2 / (4 * sigma_k**2))
+    # Normalize
+    phi_c_k /= np.linalg.norm(phi_c_k)
+    # Antiparticle (d) centered at -k, position mu_n_d
+    phi_d_k = np.exp(-1j * k_values * mu_n_d) * np.exp(-(k_values -
+                                                         (-momentum_k_magnitude))**2 / (4 * sigma_k**2))
+    # Normalize
+    phi_d_k /= np.linalg.norm(phi_d_k)
+    # --- Calculate Position Space Coefficients (Eq 13) ---
+    # Need w_k and v_k
+    # m is global MASS
+    m = MASS
+    w_k = np.sqrt(m**2 + np.sin(k_values)**2)
+    v_k = np.sin(k_values) / (m + w_k)
+    phi_tilde_c = np.zeros(N, dtype=complex)
+    phi_tilde_d = np.zeros(N, dtype=complex)
     for n in range(N):
-        # Superposition of two wave packets with opposite momenta
-        # Packet 1: moving right (+k)
-        psi1 = amps_packet1[n] * np.exp(1j * momentum_k_magnitude * n)
-        # Packet 2: moving left (-k)
-        psi2 = amps_packet2[n] * np.exp(1j * -momentum_k_magnitude * n)
+        # Projectors
+        Pi_n0 = 1 if n % 2 == 0 else 0
+        Pi_n1 = 1 if n % 2 == 1 else 0
+        # Terms in sum
+        # term_c = phi_c_k * sqrt(...) * exp(ikn) * (Pi_n0 + v_k * Pi_n1)
+        factor_c = np.sqrt((m + w_k) / w_k) * np.exp(1j *
+                                                     k_values * n) * (Pi_n0 + v_k * Pi_n1)
+        val_c = np.sum(phi_c_k * factor_c)
+        phi_tilde_c[n] = val_c / np.sqrt(N)  # 1/sqrt(N) from Eq 13
+        # term_d = phi_d_k * sqrt(...) * exp(ikn) * (Pi_n1 + v_k * Pi_n0)
+        factor_d = np.sqrt((m + w_k) / w_k) * np.exp(1j *
+                                                     k_values * n) * (Pi_n1 + v_k * Pi_n0)
+        val_d = np.sum(phi_d_k * factor_d)
+        phi_tilde_d[n] = val_d / np.sqrt(N)
+    for n in range(N):
+        if n % 2 == 0:
+            # Even Site. Vacuum is |1>.
+            # We want to create Particle (excitation) => Amplitude on |0>.
+            # phi_tilde_c[n] is the amplitude of the particle.
+            # State: sqrt(1-p)*|1> + sqrt(p)*e^{i phase}*|0>.
+            amp = phi_tilde_c[n]
+            mag = np.abs(amp)
+            phase = np.angle(amp)
+            if mag > 1.0:
+                mag = 1.0
 
-        psi_total = psi1 + psi2
+            # Ry(theta) |1> = cos(theta/2)|1> - sin(theta/2)|0>.
+            # We want coefficient of |0> to be `mag`.
+            # -sin(theta/2) = mag  => sin(theta/2) = -mag.
+            # theta/2 = arcsin(-mag) = -arcsin(mag).
+            # theta = -2 * arcsin(mag).
+            # Then coeff of |0> is -(-mag) = mag. Positive.
+            # We also need phase on |0>.
+            # P(phi) on |0> does nothing relative to |1> usually?
+            # Standard P gate: |0> -> |0>, |1> -> e^{i phi} |1>.
+            # If we have `mag |0> + C |1>`, applying P(phi) gives `mag |0> + C e^{i phi} |1>`.
+            # We want `mag e^{i phase} |0> + C |1>`.
+            # Equivalent to `mag |0> + C e^{-i phase} |1>` (up to global phase).
+            # So apply P(-phase).
 
-        # Magnitude determines population (Ry rotation)
-        combined_amplitude = np.abs(psi_total)
-        ry_angle = np.pi * (combined_amplitude / max_ry_scaling)
-        wp_circuit.ry(ry_angle, n)
+            theta = -2 * np.arcsin(mag)
+            wp_circuit.ry(theta, n)
+            wp_circuit.p(-phase, n)
 
-        # Phase determines momentum (Rz rotation)
-        # Rz(phi) imparts a relative phase e^{i*phi} to the |1> state
-        phi = np.angle(psi_total)
-        wp_circuit.rz(phi, n)
-    # wp_circuit.x(center_left_idx)
-    # wp_circuit.x(center_right_idx)
+        else:
+            # Odd Site. Vacuum is |0>.
+            # We want to create Antiparticle (excitation) => Amplitude on |1>.
+            # phi_tilde_d[n] is amplitude.
+            # State: sqrt(1-p)|0> + sqrt(p) e^{i phase} |1>.
+            amp = phi_tilde_d[n]
+            mag = np.abs(amp)
+            phase = np.angle(amp)
+            if mag > 1.0:
+                mag = 1.0
 
-    wp_circuit.barrier(label='Gaussian Wave Packet Prep')
+            # Ry(theta) |0> = cos(theta/2)|0> + sin(theta/2)|1>.
+            # sin(theta/2) = mag.
+            # theta = 2 * arcsin(mag).
+            # Coeff of |1> is mag.
+            # Apply P(phase) => mag e^{i phase} |1>.
+
+            theta = 2 * np.arcsin(mag)
+            wp_circuit.ry(theta, n)
+            wp_circuit.p(phase, n)
+
+    wp_circuit.barrier(label='Analytic Prep')
     return wp_circuit
 
 
@@ -379,6 +460,7 @@ def main():
 
     H = schwinger_hamiltonian(N_QUBITS, 1/2, MASS,
                               INITIAL_MASS, (COUPLING**2)*0.5, THETA)
+    # H = build_thirring_hamiltonian(N_QUBITS, MASS, COUPLING)
     print(f"Hamiltonian (N={N_QUBITS}, m={MASS}, g={COUPLING}):\n{H}")
 
     if len(sys.argv) < 2:
@@ -389,8 +471,12 @@ def main():
     else:
         U_ground = vqe_ground_state(H)
         vacuum_densities = measure_static_density(U_ground, N_QUBITS)
+        # print("Vacuum Densities (Expectation of (I-Z)/2):")
+        # for k, v in vacuum_densities.items():
+        #     print(f"  {k}: {v:.4f}")
+
         U_wavepacket = wave_packet_preparation(
-            N_QUBITS, packet_width_sigma=0.8, momentum_k_magnitude=5 * 2 * np.pi / N_QUBITS)
+            N_QUBITS, packet_width_sigma=3, momentum_k_magnitude=np.pi/4)
         T, density_data = simulate_scattering(H, U_ground, U_wavepacket)
         os.makedirs("cache", exist_ok=True)
         pickle.dump((T, density_data, vacuum_densities),
@@ -407,8 +493,8 @@ def main():
 
     plt.xlabel('Time (t)')
     plt.ylabel('Particle Density $\\langle n_j \\rangle$')
-    plt.title(f'Fermion Site Scattering (N={N_QUBITS}, g={
-              COUPLING}, Trotter Steps={TROTTER_STEPS} per unit time)')
+    # plt.title(f'Fermion Site Scattering (N={N_QUBITS}, g={
+    #           COUPLING}, Trotter Steps={TROTTER_STEPS} per unit time)')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.6)
 
@@ -426,8 +512,9 @@ def main():
     plt.bar(site_indices, delta_density.T[0], color='skyblue')
     plt.xlabel('Site Index')
     plt.ylabel('Initial Particle Density $\\langle n_j \\rangle_{t=0}$')
-    plt.title(f'Initial State Particle Density (t=0) (N={N_QUBITS})')
-    plt.xticks(site_indices)
+    # plt.title(f'Initial State Particle Density (t=0) (N={N_QUBITS})')
+    # plt.xticks(site_indices)
+    plt.xticks(np.arange(0, N_QUBITS, 1), np.arange(1, N_QUBITS+1, 1))
     plt.grid(True, axis='y', linestyle='--', alpha=0.6)
     plt.tight_layout()
 
@@ -446,10 +533,10 @@ def main():
 
     ax.set_xlabel('Site Index $n$')
     ax.set_ylabel('Time $t$')
-    ax.set_title(f'Fermion Site Density ($\Delta \\langle n_j \\rangle_t$) \n Schwinger Model (N={
-                 N_QUBITS}, m={MASS}, g={COUPLING}, $\\theta={THETA}$)')
+    # ax.set_title(f'Fermion Site Density ($\Delta \\langle n_j \\rangle_t$) \n Schwinger Model (N={
+                 # N_QUBITS}, m={MASS}, g={COUPLING}, $\\theta={THETA}$)')
 
-    ax.set_xticks(np.arange(0, N_QUBITS, 1))
+    ax.set_xticks(np.arange(0, N_QUBITS, 1), np.arange(1, N_QUBITS+1, 1))
 
     cbar = fig.colorbar(im, ax=ax)
     cbar.set_label('$\\Delta \\langle n_j \\rangle_t$')
