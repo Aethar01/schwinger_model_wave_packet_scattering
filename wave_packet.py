@@ -105,12 +105,12 @@ def run_simulation():
 
     # Wavepacket Parameters
     k0 = 0.32 * np.pi
-    sigma = 0.13
-
-    x_L = int(L * 1/4)
-    x_R = int(L * 3/4)
+    sigma = 1.13
 
     mid = L // 2
+    x_L = mid - 5
+    x_R = mid + 5
+
     qubits_L = list(range(0, mid))
     qubits_R = list(range(mid, L))
 
@@ -133,8 +133,8 @@ def run_simulation():
     # --- Time Evolution ---
     psi = Statevector(qc)
 
-    t_max = 20.0
-    dt = 0.25
+    t_max = 25.0
+    dt = 1/8
     steps = int(t_max / dt)
 
     density_profile = []
@@ -154,33 +154,8 @@ def run_simulation():
     current_psi = psi
 
     for step in range(steps + 1):
-        # Measure density
-        # For L=14, computing probabilities is fast
-        # probs = current_psi.probabilities()
-
         row = []
-        # Calculate local densities manually to avoid overhead of many calls
-        # Density n_i = Prob(qubit i is 1)
-        # We can iterate over probs array (size 2^L = 16384)
-
-        # Efficient calculation of marginals from statevector probabilities
-        # Reshape to [2, 2, ..., 2]
-        # probs_reshaped = probs.reshape([2]*L)
-
         for i in range(L):
-            # Sum over all axes except i
-            # Qubit 0 is rightmost in Qiskit bitstring, so axis L-1-0?
-            # Statevector.probabilities returns order |q_L-1 ... q_0> or q0...qL-1?
-            # Qiskit: Little endian. q0 is rightmost.
-            # Array index 0 corresponds to |0...00>
-            # Array index 1 corresponds to |0...01> (q0=1)
-            # So axis L-1 corresponds to q0.
-            # Axis 0 corresponds to q_L-1.
-
-            # To get Prob(q_i = 1), we sum over all axes except (L-1-i).
-            # But constructing axes tuple is tedious.
-            # Let's rely on Qiskit's `probabilities([i])` for simplicity and correctness.
-            # It's optimized enough for L=14.
             p1 = current_psi.probabilities([i])[1]
             row.append(p1)
 
@@ -198,11 +173,6 @@ def run_simulation():
     density_profile = np.array(density_profile)
 
     plt.figure(figsize=(8, 6))
-    # Origin lower means index 0 at bottom.
-    # We want time on Y axis? Paper Fig 4 has Time on Y axis (implied or explicit).
-    # Fig 4: Time increases upwards.
-    # Our data: density_profile[time_index][site_index].
-    # So imshow(density_profile) puts time on Y (rows) and site on X (cols).
     plt.imshow(density_profile, aspect='auto', origin='lower',
                extent=[0, L, 0, t_max], cmap='magma')
     plt.colorbar(label="Particle Density")
