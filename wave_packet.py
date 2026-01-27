@@ -97,7 +97,7 @@ def prepare_w_state_circuit(n_qubits, qubits, k0, x0, sigma):
 
 def run_simulation():
     # --- Parameters ---
-    L = 14  # System size (small for efficient demo)
+    L = 18
 
     # IFT Parameters from Paper (Section III)
     gx = 1.25
@@ -105,10 +105,10 @@ def run_simulation():
 
     # Wavepacket Parameters
     k0 = 0.32 * np.pi
-    sigma = 2.0
+    sigma = 0.13
 
-    x_L = 3
-    x_R = 10
+    x_L = int(L * 1/4)
+    x_R = int(L * 3/4)
 
     mid = L // 2
     qubits_L = list(range(0, mid))
