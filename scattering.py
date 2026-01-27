@@ -349,7 +349,7 @@ def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.p
             # sin(theta/2) = mag.
             # theta = 2 * arcsin(mag).
             # Coeff of |1> is mag.
-            # Apply P(phase) => mag e^{i phase} |1>.
+            # Apply P(phase) => mag e^{i phase} |1>`.
 
             theta = 2 * np.arcsin(mag)
             wp_circuit.ry(theta, n)
@@ -359,12 +359,12 @@ def wave_packet_preparation(N, packet_width_sigma=1.0, momentum_k_magnitude=np.p
     return wp_circuit
 
 
-def simulate_scattering(H, U0, Uwp):
+def simulate_scattering_standard(H, U0, Uwp):
     """
     Time-evolves the state using PauliEvolutionGate with manual Trotter steps and measures particle density.
-    This version is optimized by batching all circuits into a single estimator job for performance.
+    This version is physically correct and optimized by batching all circuits into a single estimator job.
     """
-    print("\n--- 4. Adiabatic Time Evolution and Measurement ---")
+    print("\n--- 4. Adiabatic Time Evolution and Measurement (Standard Method) ---")
 
     # Prepare initial state circuit, which is the same for all time steps
     initial_state_circuit = QuantumCircuit(N_QUBITS, name="Initial State")
@@ -408,7 +408,6 @@ def simulate_scattering(H, U0, Uwp):
 
     # --- 2. Prepare all Program-Unit-of-Work (PUBs) for the estimator ---
     # Each PUB is a (circuit, observable) pair.
-    # We create a flat list of all circuit-observable pairs to run in one job.
     pubs = [(circuit, obs)
             for circuit in circuits_to_run for _, obs in observables]
 
@@ -421,15 +420,73 @@ def simulate_scattering(H, U0, Uwp):
     print("Estimator job finished.")
 
     # --- 4. Process the results ---
-    # The results will be a flat list of expectation values. Access via the .values attribute.
     results_flat = np.array([res.data.evs.real for res in raw_results])
-
-    # Reshape the results: (num_time_steps, num_observables)
     results_reshaped = results_flat.reshape(TIME_STEPS, len(observables))
 
     density_dynamics = {key: [] for key, _ in observables}
     for j, (key, _) in enumerate(observables):
         density_dynamics[key] = results_reshaped[:, j].tolist()
+
+    return time_points, density_dynamics
+
+
+def simulate_scattering_ancilla(H, U0, Uwp):
+    """
+    Time-evolves the state using PauliEvolutionGate with manual Trotter steps and measures particle density.
+    This version is optimized using the 'Ancilla Copy Method' (warning: introduces measurement backaction).
+    """
+    print("\n--- 4. Adiabatic Time Evolution and Measurement (Ancilla Method) ---")
+
+    time_points = np.linspace(0, TIME_MAX, TIME_STEPS)
+    num_time_points = len(time_points)
+    pubs = []
+    delta_t_fixed = 1.0 / TROTTER_STEPS
+
+    for target_site in range(N_QUBITS):
+        qc = QuantumCircuit(N_QUBITS + num_time_points,
+                            name=f"Site_{target_site}")
+        qc.append(U0, range(N_QUBITS))
+        qc.append(Uwp, range(N_QUBITS))
+        current_t = 0.0
+
+        for t_idx, t in enumerate(time_points):
+            interval = t - current_t
+            if interval > 1e-9:
+                num_trotter_steps = max(
+                    1, int(round(interval / delta_t_fixed)))
+                dt = interval / num_trotter_steps
+                trotter_gate = PauliEvolutionGate(H, time=dt)
+                for _ in range(num_trotter_steps):
+                    qc.append(trotter_gate, range(N_QUBITS))
+            current_t = t
+            ancilla_idx = N_QUBITS + t_idx
+            qc.cx(target_site, ancilla_idx)
+
+        circuit_observables = []
+        total_qubits = N_QUBITS + num_time_points
+        for t_idx in range(num_time_points):
+            anc_idx = N_QUBITS + t_idx
+            pauli_str_list = ['I'] * total_qubits
+            pauli_str_list[total_qubits - 1 - anc_idx] = 'Z'
+            z_string = "".join(pauli_str_list)
+            id_string = 'I' * total_qubits
+            dens_op = SparsePauliOp.from_list(
+                [(id_string, 0.5), (z_string, -0.5)]).simplify()
+            circuit_observables.append(dens_op)
+
+        pubs.append((qc, circuit_observables))
+
+    print(f"Submitting {
+          len(pubs)} circuits (each with {num_time_points} observables) to the estimator...")
+    estimator = StatevectorEstimator()
+    job = estimator.run(pubs)
+    results = job.result()
+
+    density_dynamics = {}
+    for i, pub_result in enumerate(results):
+        target_site = i
+        vals = pub_result.data.evs.real
+        density_dynamics[f'Density_Site_{target_site}'] = vals.tolist()
 
     return time_points, density_dynamics
 
@@ -463,21 +520,32 @@ def main():
     # H = build_thirring_hamiltonian(N_QUBITS, MASS, COUPLING)
     print(f"Hamiltonian (N={N_QUBITS}, m={MASS}, g={COUPLING}):\n{H}")
 
-    if len(sys.argv) < 2:
-        sys.argv.append("cache")
-    if os.path.exists("cache/density_data.pkl") and sys.argv[1] != "new":
+    # Argument Parsing
+    mode = "cache"
+    if "new" in sys.argv:
+        mode = "new"
+
+    method = "standard"
+    if "ancilla" in sys.argv:
+        method = "ancilla"
+
+    if os.path.exists("cache/density_data.pkl") and mode != "new":
         T, density_data, vacuum_densities = pickle.load(
             open("cache/density_data.pkl", "rb"))
     else:
         U_ground = vqe_ground_state(H)
         vacuum_densities = measure_static_density(U_ground, N_QUBITS)
-        # print("Vacuum Densities (Expectation of (I-Z)/2):")
-        # for k, v in vacuum_densities.items():
-        #     print(f"  {k}: {v:.4f}")
 
         U_wavepacket = wave_packet_preparation(
             N_QUBITS, packet_width_sigma=3, momentum_k_magnitude=np.pi/4)
-        T, density_data = simulate_scattering(H, U_ground, U_wavepacket)
+
+        if method == "ancilla":
+            T, density_data = simulate_scattering_ancilla(
+                H, U_ground, U_wavepacket)
+        else:
+            T, density_data = simulate_scattering_standard(
+                H, U_ground, U_wavepacket)
+
         os.makedirs("cache", exist_ok=True)
         pickle.dump((T, density_data, vacuum_densities),
                     open("cache/density_data.pkl", "wb"))
@@ -492,7 +560,7 @@ def main():
         plt.plot(T, values, label=label_text, marker='o', markersize=3)
 
     plt.xlabel('Time (t)')
-    plt.ylabel('Particle Density $\\langle n_j \\rangle$')
+    plt.ylabel(r'Particle Density $\langle n_j \rangle$')
     # plt.title(f'Fermion Site Scattering (N={N_QUBITS}, g={
     #           COUPLING}, Trotter Steps={TROTTER_STEPS} per unit time)')
     plt.legend()
@@ -511,7 +579,7 @@ def main():
     plt.figure(figsize=(10, 6))
     plt.bar(site_indices, delta_density.T[0], color='skyblue')
     plt.xlabel('Site Index')
-    plt.ylabel('Initial Particle Density $\\langle n_j \\rangle_{t=0}$')
+    plt.ylabel(r'Initial Particle Density $\langle n_j \rangle_{t=0}$')
     # plt.title(f'Initial State Particle Density (t=0) (N={N_QUBITS})')
     # plt.xticks(site_indices)
     plt.xticks(np.arange(0, N_QUBITS, 1), np.arange(1, N_QUBITS+1, 1))
@@ -533,13 +601,13 @@ def main():
 
     ax.set_xlabel('Site Index $n$')
     ax.set_ylabel('Time $t$')
-    # ax.set_title(f'Fermion Site Density ($\Delta \\langle n_j \\rangle_t$) \n Schwinger Model (N={
-                 # N_QUBITS}, m={MASS}, g={COUPLING}, $\\theta={THETA}$)')
+    # ax.set_title(f'Fermion Site Density ($\Delta \langle n_j \rangle_t$) \n Schwinger Model (N={
+    # N_QUBITS}, m={MASS}, g={COUPLING}, $\theta={THETA}$)')
 
     ax.set_xticks(np.arange(0, N_QUBITS, 1), np.arange(1, N_QUBITS+1, 1))
 
     cbar = fig.colorbar(im, ax=ax)
-    cbar.set_label('$\\Delta \\langle n_j \\rangle_t$')
+    cbar.set_label(r'$\Delta \langle n_j \rangle_t$')
 
     plt.tight_layout()
     plt.show()
