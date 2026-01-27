@@ -43,6 +43,68 @@ def get_ising_hamiltonian_obc(L, gx, gz):
     return SparsePauliOp.from_list(op_list)
 
 
+def get_schwinger_hamiltonian(L, w, m, J, theta=0.0):
+    """
+    Constructs the Hamiltonian for the Schwinger Model (1+1D QED) on a lattice.
+
+    Args:
+        L (int): Number of lattice sites (qubits).
+        w (float): Hopping coefficient.
+        m (float): Mass coefficient.
+        J (float): Coupling coefficient (usually g^2/2).
+        theta (float): Topological angle.
+
+    Returns:
+        SparsePauliOp: The Hamiltonian operator.
+    """
+    op_list = []
+
+    # 1. Hopping Term: 0.5 * w * (X_n X_{n+1} + Y_n Y_{n+1}) + Mass corrections
+    for n in range(L - 1):
+        term_coeff = 0.5 * (w - ((-1.0)**(n + 1) * m * np.sin(theta) * 0.5))
+
+        # XX
+        label_x = ["I"] * L
+        label_x[L - 1 - n] = "X"
+        label_x[L - 1 - (n + 1)] = "X"
+        op_list.append(("".join(label_x), term_coeff))
+
+        # YY
+        label_y = ["I"] * L
+        label_y[L - 1 - n] = "Y"
+        label_y[L - 1 - (n + 1)] = "Y"
+        op_list.append(("".join(label_y), term_coeff))
+
+    # 2. Mass Term: m * (-1)^n * Z_n
+    for n in range(L):
+        mass_sign = (-1.0)**(n + 1)
+        term_coeff = m * mass_sign * np.cos(theta) * 0.5
+
+        label_z = ["I"] * L
+        label_z[L - 1 - n] = "Z"
+        op_list.append(("".join(label_z), term_coeff))
+
+    # 3. Electric Field / Interaction
+    # Term 1: - (J/2) * sum_{n} (if n+1 odd) sum_{l <= n} Z_l
+    for n in range(L - 1):
+        if (n + 1) % 2 == 1:
+            for l in range(n + 1):
+                label = ["I"] * L
+                label[L - 1 - l] = "Z"
+                op_list.append(("".join(label), -J / 2.0))
+
+    # Term 2: (J/2) * sum_{n} sum_{l <= n} sum_{k < l} Z_k Z_l
+    for n in range(L - 1):
+        for l in range(n + 1):
+            for k in range(l):
+                label = ["I"] * L
+                label[L - 1 - k] = "Z"
+                label[L - 1 - l] = "Z"
+                op_list.append(("".join(label), J / 2.0))
+
+    return SparsePauliOp.from_list(op_list).simplify()
+
+
 def prepare_w_state_circuit(n_qubits, qubits, k0, x0, sigma):
     """
     Implements the unitary circuit to prepare a Wavepacket (W-state-like).
@@ -103,6 +165,12 @@ def run_simulation():
     gx = 1.25
     gz = 0.15
 
+    # Schwinger Parameters
+    w = 0.5
+    m = 1.0
+    J = 0.5
+    theta = 0
+
     # Wavepacket Parameters
     k0 = 0.32 * np.pi
     sigma = 1.13
@@ -119,7 +187,9 @@ def run_simulation():
     x_R_local = x_R - mid
 
     # --- Hamiltonian ---
-    H_op = get_ising_hamiltonian_obc(L, gx, gz)
+    Ising = False; schwinger = False
+    H_op = get_ising_hamiltonian_obc(L, gx, gz); Ising = True
+    # H_op = get_schwinger_hamiltonian(L, w, m, J, theta=theta); schwinger = True
 
     # --- State Preparation ---
     qc = QuantumCircuit(L)
@@ -134,13 +204,16 @@ def run_simulation():
     psi = Statevector(qc)
 
     t_max = 25.0
-    dt = 1/8
+    dt = 0.55
     steps = int(t_max / dt)
 
     density_profile = []
 
     print(f"Starting simulation on L={L} sites...")
-    print(f"Hamiltonian: Ising Field Theory (OBC), gx={gx}, gz={gz}")
+    if schwinger:
+        print(f"Hamiltonian: Schwinger Model (1+1D QED), w={w}, m={m}, J={J}, theta={theta}")
+    if Ising:
+        print(f"Hamiltonian: Ising Field Theory (OBC), gx={gx}, gz={gz}")
     print(f"Wavepackets: k0={k0/np.pi:.2f}pi, sigma={sigma}")
 
     # Evolution Circuit
@@ -172,14 +245,16 @@ def run_simulation():
     # --- Plotting ---
     density_profile = np.array(density_profile)
 
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(6, 10))
     plt.imshow(density_profile, aspect='auto', origin='lower',
                extent=[0, L, 0, t_max], cmap='magma')
     plt.colorbar(label="Particle Density")
     plt.xlabel("Lattice Site n")
     plt.ylabel("Time t")
-    plt.title(f"Scattering in Ising Field Theory (L={L})\n$g_x={
-              gx}, g_z={gz}, k_0={k0/np.pi:.2f}\\pi$")
+    if schwinger:
+        plt.title(f"Scattering in Schwinger Model (L={L})\n$w={w}, m={m}, J={J}, k_0={k0/np.pi:.2f}\\pi$")
+    if Ising:
+        plt.title(f"Scattering in Ising Field Theory (L={L})\n$k_0={k0/np.pi:.2f}\\pi, \\sigma={sigma}$")
     plt.savefig("scattering_density.png")
     print("Plot saved to scattering_density.png")
 
