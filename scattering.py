@@ -16,6 +16,7 @@ from sys import argv
 from ising import get_ising_hamiltonian_obc
 from schwinger import get_schwinger_hamiltonian
 from wave_packet import prepare_w_state_circuit
+from adapt_vqe import apply_adapt_vqe_layer
 
 
 def run_simulation():
@@ -50,10 +51,11 @@ def run_simulation():
     # --- Hamiltonian Selection ---
     # Uncomment the model you want to simulate
     model_name = "Ising"
-    if argv[1].lower() == "ising":
-        model_name = "Ising"  # Default
-    if argv[1].lower() == "schwinger":
-        model_name = "Schwinger"
+    if len(argv) > 1:
+        if argv[1].lower() == "ising":
+            model_name = "Ising"  # Default
+        if argv[1].lower() == "schwinger":
+            model_name = "Schwinger"
 
     if model_name == "Ising":
         print("Initializing Ising Field Theory Hamiltonian...")
@@ -80,8 +82,32 @@ def run_simulation():
     qc_R = prepare_w_state_circuit(L, qubits_R, -k0, x_R_local, sigma)
     qc.compose(qc_R, inplace=True)
 
+    # if model_name == "Ising":
+    #     # ADAPT-VQE Parameters (Table VI, L=104, k0=0.32pi)
+    #     # These optimize the overlap with the single-particle eigenstate.
+    #     adapt_params = [
+    #         ("Y", 0.0191),
+    #         ("YZ", 0.0276),
+    #         ("Y", -0.4497),
+    #         ("ZXY", 0.0226),
+    #         ("YZ", 0.0618),
+    #         ("Y", 0.0000),
+    #         ("ZXY", -0.2238)
+    #     ]
+    #     print("Applying ADAPT-VQE cleaning layers...")
+    #     apply_adapt_vqe_layer(qc, L, adapt_params)
+    #
+    # # --- Vacuum Preparation ---
+    # print("Preparing Vacuum State...")
+    vac_qc = QuantumCircuit(L)
+    # if model_name == "Ising":
+    #     # Apply the same ADAPT-VQE layer to |0...0> to prepare the approximate vacuum
+    #     # as described in the paper (Eq. 41/73 context).
+    #     apply_adapt_vqe_layer(vac_qc, L, adapt_params)
+
     # --- Time Evolution ---
     psi = Statevector(qc)
+    vac_psi = Statevector(vac_qc)
 
     t_max = 25.0
     dt = 0.55
@@ -103,19 +129,24 @@ def run_simulation():
     step_circuit = step_circuit.decompose()
 
     current_psi = psi
+    current_vac = vac_psi
 
     for step in range(steps + 1):
         row = []
         for i in range(L):
             # Probability of |1> at site i
-            p1 = current_psi.probabilities([i])[1]
-            row.append(p1)
+            p1_wp = current_psi.probabilities([i])[1]
+            p1_vac = current_vac.probabilities([i])[1]
+
+            # Subtract vacuum contribution
+            row.append(p1_wp - p1_vac)
 
         density_profile.append(row)
 
         # Evolve
         if step < steps:
             current_psi = current_psi.evolve(step_circuit)
+            # current_vac = current_vac.evolve(step_circuit)
 
         print(f"Step {step}/{steps} completed.", end="\r")
 
@@ -129,7 +160,7 @@ def run_simulation():
     plt.figure(figsize=(6, 10))
     plt.imshow(density_profile, aspect='auto', origin='lower',
                extent=[0, L, 0, t_max], cmap='magma')
-    plt.colorbar(label="Particle Density")
+    plt.colorbar(label="Vacuum-Subtracted Particle Density")
     plt.xlabel("Lattice Site n")
     plt.ylabel("Time t")
     plt.title(title_str)
@@ -147,7 +178,7 @@ def run_simulation():
             plt.figure(figsize=(8, 6))
             plt.plot(density_profile[step_idx])
             plt.xlabel("Lattice Site n")
-            plt.ylabel("Particle Density")
+            plt.ylabel("Vacuum-Subtracted Particle Density")
             plt.text(0.05, 0.95, f"t={t}", ha='left',
                      va='top', transform=plt.gca().transAxes)
             plt.title(title_str)
