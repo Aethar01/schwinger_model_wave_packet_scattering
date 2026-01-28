@@ -10,6 +10,7 @@ from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector, SparsePauliOp
 from qiskit.circuit.library import PauliEvolutionGate
 from qiskit.synthesis import SuzukiTrotter
+from os import makedirs
 
 
 def get_ising_hamiltonian_obc(L, gx, gz):
@@ -187,9 +188,10 @@ def run_simulation():
     x_R_local = x_R - mid
 
     # --- Hamiltonian ---
-    Ising = False; schwinger = False
-    H_op = get_ising_hamiltonian_obc(L, gx, gz); Ising = True
-    # H_op = get_schwinger_hamiltonian(L, w, m, J, theta=theta); schwinger = True
+    Ising = False
+    Schwinger = False
+    # H_op, Ising = get_ising_hamiltonian_obc(L, gx, gz), True
+    H_op, Schwinger = get_schwinger_hamiltonian(L, w, m, J, theta=theta), True
 
     # --- State Preparation ---
     qc = QuantumCircuit(L)
@@ -210,8 +212,9 @@ def run_simulation():
     density_profile = []
 
     print(f"Starting simulation on L={L} sites...")
-    if schwinger:
-        print(f"Hamiltonian: Schwinger Model (1+1D QED), w={w}, m={m}, J={J}, theta={theta}")
+    if Schwinger:
+        print(
+            f"Hamiltonian: Schwinger Model (1+1D QED), w={w}, m={m}, J={J}, theta={theta}")
     if Ising:
         print(f"Hamiltonian: Ising Field Theory (OBC), gx={gx}, gz={gz}")
     print(f"Wavepackets: k0={k0/np.pi:.2f}pi, sigma={sigma}")
@@ -243,6 +246,12 @@ def run_simulation():
     print("\nSimulation complete.")
 
     # --- Plotting ---
+    if Schwinger:
+        save_dir = "schwinger"
+    if Ising:
+        save_dir = "ising"
+    makedirs(save_dir, exist_ok=True)
+
     density_profile = np.array(density_profile)
 
     plt.figure(figsize=(6, 10))
@@ -251,12 +260,32 @@ def run_simulation():
     plt.colorbar(label="Particle Density")
     plt.xlabel("Lattice Site n")
     plt.ylabel("Time t")
-    if schwinger:
-        plt.title(f"Scattering in Schwinger Model (L={L})\n$w={w}, m={m}, J={J}, k_0={k0/np.pi:.2f}\\pi$")
+    if Schwinger:
+        plt.title(f"Scattering in Schwinger Model (L={L})\n$w={
+                  w}, m={m}, J={J}, k_0={k0/np.pi:.2f}\\pi$")
     if Ising:
-        plt.title(f"Scattering in Ising Field Theory (L={L})\n$k_0={k0/np.pi:.2f}\\pi, \\sigma={sigma}$")
-    plt.savefig("scattering_density.png")
-    print("Plot saved to scattering_density.png")
+        plt.title(f"Scattering in Ising Field Theory (L={L})\n$k_0={
+                  k0/np.pi:.2f}\\pi, \\sigma={sigma}$")
+    plt.savefig(f"{save_dir}/scattering_density.png")
+    print(f"Plot saved to {save_dir}/scattering_density.png")
+
+    # plot density profiles at times 0, 5 and 10
+    ts = [0, 5, 13.5]
+    steps = [int(t / dt) for t in ts]
+
+    for t, step in zip(ts, steps):
+        plt.figure(figsize=(8, 6))
+        plt.plot(density_profile[step])
+        plt.xlabel("Lattice Site n")
+        plt.ylabel("Particle Density")
+        if Schwinger:
+            plt.title(f"Scattering in Schwinger Model (L={L})\n$w={
+                      w}, m={m}, J={J}, k_0={k0/np.pi:.2f}\\pi$")
+        if Ising:
+            plt.title(f"Scattering in Ising Field Theory (L={L})\n$k_0={
+                      k0/np.pi:.2f}\\pi, \\sigma={sigma}$")
+        plt.savefig(f"{save_dir}/scattering_density_{t}.png")
+        print(f"Plot saved to {save_dir}/scattering_density_{t}.png")
 
 
 if __name__ == "__main__":
