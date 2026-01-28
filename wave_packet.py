@@ -190,8 +190,8 @@ def run_simulation():
     # --- Hamiltonian ---
     Ising = False
     Schwinger = False
-    # H_op, Ising = get_ising_hamiltonian_obc(L, gx, gz), True
-    H_op, Schwinger = get_schwinger_hamiltonian(L, w, m, J, theta=theta), True
+    H_op, Ising = get_ising_hamiltonian_obc(L, gx, gz), True
+    # H_op, Schwinger = get_schwinger_hamiltonian(L, w, m, J, theta=theta), True
 
     # --- State Preparation ---
     qc = QuantumCircuit(L)
@@ -278,6 +278,7 @@ def run_simulation():
         plt.plot(density_profile[step])
         plt.xlabel("Lattice Site n")
         plt.ylabel("Particle Density")
+        plt.text(0.05, 0.95, f"t={t}", ha='left', va='top', transform=plt.gca().transAxes)
         if Schwinger:
             plt.title(f"Scattering in Schwinger Model (L={L})\n$w={
                       w}, m={m}, J={J}, k_0={k0/np.pi:.2f}\\pi$")
