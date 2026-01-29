@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Main Simulation Script for Scattering in Ising Field Theory and Schwinger Model.
-"""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -16,11 +13,11 @@ from sys import argv
 from ising import get_ising_hamiltonian_obc
 from schwinger import get_schwinger_hamiltonian
 from wave_packet import prepare_w_state_circuit
-from adapt_vqe import apply_adapt_vqe_layer
+# from adapt_vqe import apply_adapt_vqe_layer
 
 
 def run_simulation():
-    # --- Parameters ---
+    # Parameters
     L = 18
 
     # IFT Parameters from Paper (Section III)
@@ -124,8 +121,6 @@ def run_simulation():
     step_circuit = QuantumCircuit(L)
     step_circuit.append(evo_gate, range(L))
 
-    # Decomposing once speeds up statevector evolution (native gates vs opaque gate)
-    # Note: For very large L, decomposition might be slow, but for 18 it's fine.
     step_circuit = step_circuit.decompose()
 
     current_psi = psi
@@ -152,7 +147,7 @@ def run_simulation():
 
     print("\nSimulation complete.")
 
-    # --- Plotting ---
+    # Plotting
     makedirs(save_dir, exist_ok=True)
 
     density_profile = np.array(density_profile)
@@ -170,7 +165,6 @@ def run_simulation():
     # plot density profiles at specific times
     ts = [0, 5, 13.5]
 
-    # Find closest steps
     target_steps = [int(t / dt) for t in ts]
 
     for t, step_idx in zip(ts, target_steps):
