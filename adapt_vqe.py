@@ -1,87 +1,85 @@
 from qiskit import QuantumCircuit
 from qiskit.circuit.library import PauliEvolutionGate
-from qiskit.quantum_info import SparsePauliOp
+from qiskit.quantum_info import SparsePauliOp, Statevector
 from qiskit.synthesis import SuzukiTrotter
+from scipy.optimize import minimize
+import numpy as np
 
 
 def get_op_pool_operator(L, op_name):
     """
     Generates the translationally invariant operator for a given name 
     under Open Boundary Conditions (OBC).
-
-    Based on Eq. (17) in Farrell et al.
     """
     op_list = []
 
-    if op_name == "Y":
-        # Sum_n Y_n
+    if op_name == "Schwinger_1":
+        # Sum_n (-1)^n (X_n Y_{n+1} - Y_n X_{n+1})
+        # This is derived from [H_mass, H_kin] ~ [Sum (-1)^n Z_n, Sum (XX+YY)]
+        for n in range(L - 1):
+            sign = (-1)**n
+            
+            # X_n Y_{n+1}
+            l1 = ["I"] * L
+            l1[L - 1 - n] = "X"
+            l1[L - 1 - (n+1)] = "Y"
+            op_list.append(("".join(l1), sign * 1.0))
+
+            # - Y_n X_{n+1}
+            l2 = ["I"] * L
+            l2[L - 1 - n] = "Y"
+            l2[L - 1 - (n+1)] = "X"
+            op_list.append(("".join(l2), -1.0 * sign))
+
+    elif op_name == "Y":
         for n in range(L):
             label = ["I"] * L
             label[L - 1 - n] = "Y"
             op_list.append(("".join(label), 1.0))
 
     elif op_name == "Z":
-        # Sum_n Z_n
         for n in range(L):
             label = ["I"] * L
             label[L - 1 - n] = "Z"
             op_list.append(("".join(label), 1.0))
 
     elif op_name == "YZ":
-        # Sum_n (Y_n Z_{n+1} + Z_n Y_{n+1})
         for n in range(L - 1):
-            # Term Y Z
             l1 = ["I"] * L
             l1[L - 1 - n] = "Y"
             l1[L - 1 - (n+1)] = "Z"
             op_list.append(("".join(l1), 1.0))
 
-            # Term Z Y
             l2 = ["I"] * L
             l2[L - 1 - n] = "Z"
             l2[L - 1 - (n+1)] = "Y"
             op_list.append(("".join(l2), 1.0))
 
     elif op_name == "YX":
-        # Sum_n (Y_n X_{n+1} + X_n Y_{n+1})
         for n in range(L - 1):
-            # Term Y X
             l1 = ["I"] * L
             l1[L - 1 - n] = "Y"
             l1[L - 1 - (n+1)] = "X"
             op_list.append(("".join(l1), 1.0))
 
-            # Term X Y
             l2 = ["I"] * L
             l2[L - 1 - n] = "X"
             l2[L - 1 - (n+1)] = "Y"
             op_list.append(("".join(l2), 1.0))
 
     elif op_name == "ZXY":
-        # Sum_n (Z_n X_{n+1} Y_{n+2} + Y_n X_{n+1} Z_{n+2})
         for n in range(L - 2):
-            # Term Z X Y
             l1 = ["I"] * L
             l1[L - 1 - n] = "Z"
             l1[L - 1 - (n+1)] = "X"
             l1[L - 1 - (n+2)] = "Y"
             op_list.append(("".join(l1), 1.0))
 
-            # Term Y X Z
             l2 = ["I"] * L
             l2[L - 1 - n] = "Y"
             l2[L - 1 - (n+1)] = "X"
             l2[L - 1 - (n+2)] = "Z"
             op_list.append(("".join(l2), 1.0))
-
-    elif op_name == "ZYZ":
-        # Sum_n Z_n Y_{n+1} Z_{n+2}
-        for n in range(L - 2):
-            label = ["I"] * L
-            label[L - 1 - n] = "Z"
-            label[L - 1 - (n+1)] = "Y"
-            label[L - 1 - (n+2)] = "Z"
-            op_list.append(("".join(label), 1.0))
 
     else:
         raise ValueError(f"Operator {op_name} not implemented in pool.")
@@ -92,14 +90,7 @@ def get_op_pool_operator(L, op_name):
 def apply_adapt_vqe_layer(qc: QuantumCircuit, L, parameters):
     """
     Applies the ADAPT-VQE unitary layers to the quantum circuit.
-
-    Args:
-        qc (QuantumCircuit): The circuit to append to.
-        L (int): System size.
-        parameters (list of tuple): List of (op_name, theta) tuples.
     """
-    # Use Trotter synthesis to decompose the exponential of Pauli sums into gates.
-    # This avoids constructing the full dense matrix which causes memory errors for L=18.
     synth = SuzukiTrotter(order=2, reps=1)
 
     for op_name, theta in parameters:
@@ -107,10 +98,97 @@ def apply_adapt_vqe_layer(qc: QuantumCircuit, L, parameters):
             continue
 
         op = get_op_pool_operator(L, op_name)
-
-        # PauliEvolutionGate(op, time=t) implements exp(-i * t * op)
-        # To get exp(i * theta * O), we set t = -theta.
+        # exp(i * theta * O)
         evo = PauliEvolutionGate(op, time=-theta, synthesis=synth)
-
-        # Decompose immediately to ensure we have standard gates in the circuit
         qc.compose(evo.definition, range(L), inplace=True)
+
+
+def run_adapt_vqe(H, initial_state_qc, L, max_steps=1, pool=["Schwinger_1"]):
+    """
+    Runs a simplified ADAPT-VQE loop.
+    
+    Args:
+        H (SparsePauliOp): Hamiltonian.
+        initial_state_qc (QuantumCircuit): Circuit preparing the initial state.
+        L (int): System size.
+        max_steps (int): Number of ADAPT layers to add.
+        pool (list): List of operator names to consider.
+        
+    Returns:
+        list: Optimized ansatz [(op_name, theta), ...]
+    """
+    ansatz = []
+    
+    # Precompute pool operators
+    pool_ops = {name: get_op_pool_operator(L, name) for name in pool}
+    
+    current_params = []
+    
+    for step in range(max_steps):
+        print(f"  ADAPT-VQE Step {step+1}/{max_steps}...")
+        
+        # 1. Prepare current state
+        qc = initial_state_qc.copy()
+        apply_adapt_vqe_layer(qc, L, ansatz)
+        psi = Statevector(qc)
+        
+        # 2. Measure gradients: |<psi| [H, A] |psi>|
+        # Since A is anti-Hermitian (i*P), [H, A] is Hermitian?
+        # A_k = i * P_k. 
+        # Gradient is dE/dtheta = <psi| [H, A_k] |psi>
+        # [H, i P_k] = i (H P_k - P_k H).
+        # This is an observable.
+        
+        best_op = None
+        max_grad = -1.0
+        
+        for name, op in pool_ops.items():
+            # Commutator C = [H, op]
+            # Since 'op' in pool is usually defined as the Hermitian part P, and U = exp(i theta P).
+            # The generator is i P. 
+            # Grad = <psi | [H, i P] | psi > = i <psi| [H, P] |psi>
+            #      = i <psi| (HP - PH) |psi> = i ( <psi|HP|psi> - <psi|PH|psi> )
+            #      = i ( <psi|HP|psi> - <psi|HP|psi>* )  (since H, P Hermitian)
+            #      = i ( 2i Im( <psi|HP|psi> ) ) = -2 Im( <psi|HP|psi> )
+            
+            # We can compute <psi| H @ op |psi>
+            # Note: SparsePauliOp matmul is '@'.
+            
+            val = psi.expectation_value(H @ op)
+            grad = abs(2 * val.imag)
+            
+            if grad > max_grad:
+                max_grad = grad
+                best_op = name
+        
+        print(f"    Best operator: {best_op} (Grad: {max_grad:.6f})")
+        
+        if max_grad < 1e-3:
+            print("    Gradient too small, stopping.")
+            break
+            
+        ansatz.append((best_op, 0.0))
+        current_params.append(0.0)
+        
+        # 3. Optimize parameters
+        def cost_fn(params):
+            qc_opt = initial_state_qc.copy()
+            # Reconstruct ansatz with new params
+            current_ansatz = []
+            for i, (name, _) in enumerate(ansatz):
+                current_ansatz.append((name, params[i]))
+            
+            apply_adapt_vqe_layer(qc_opt, L, current_ansatz)
+            psi_opt = Statevector(qc_opt)
+            return psi_opt.expectation_value(H).real
+        
+        res = minimize(cost_fn, current_params, method='COBYLA', tol=1e-3)
+        current_params = list(res.x)
+        
+        # Update ansatz with optimized params
+        for i in range(len(ansatz)):
+            ansatz[i] = (ansatz[i][0], current_params[i])
+            
+        print(f"    New Energy: {res.fun:.6f}")
+        
+    return ansatz
