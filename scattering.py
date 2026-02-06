@@ -11,7 +11,6 @@ from sys import argv
 
 # Import from split modules
 from ising import get_ising_hamiltonian_obc
-from schwinger import get_schwinger_hamiltonian
 from wave_packet import prepare_w_state_circuit
 # from adapt_vqe import apply_adapt_vqe_layer
 
@@ -23,12 +22,6 @@ def run_simulation():
     # IFT Parameters from Paper (Section III)
     gx = 1.25
     gz = 0.15
-
-    # Schwinger Parameters
-    w = 0.5
-    m = 1.0
-    J = 0.5
-    theta = 0
 
     # Wavepacket Parameters
     k0 = 0.32 * np.pi
@@ -46,28 +39,10 @@ def run_simulation():
     x_R_local = x_R - mid
 
     # --- Hamiltonian Selection ---
-    # Uncomment the model you want to simulate
-    model_name = "Ising"
-    if len(argv) > 1:
-        if argv[1].lower() == "ising":
-            model_name = "Ising"  # Default
-        if argv[1].lower() == "schwinger":
-            model_name = "Schwinger"
-
-    if model_name == "Ising":
-        print("Initializing Ising Field Theory Hamiltonian...")
-        H_op = get_ising_hamiltonian_obc(L, gx, gz)
-        save_dir = "ising"
-        title_str = f"Scattering in Ising Field Theory (L={L})\\n$k_0={
-            k0/np.pi:.2f}\\pi, \\sigma={sigma}$"
-    elif model_name == "Schwinger":
-        print("Initializing Schwinger Model Hamiltonian...")
-        H_op = get_schwinger_hamiltonian(L, w, m, J, theta=theta)
-        save_dir = "schwinger"
-        title_str = f"Scattering in Schwinger Model (L={L})\\n$w={w}, m={m}, J={
-            J}, k_0={k0/np.pi:.2f}\\pi, \\sigma={sigma}$"
-    else:
-        raise ValueError("Unknown model name")
+    print("Initializing Ising Field Theory Hamiltonian...")
+    H_op = get_ising_hamiltonian_obc(L, gx, gz)
+    save_dir = "ising"
+    title_str = f"Scattering in Ising Field Theory (L={L})\\n$k_0={k0/np.pi:.2f}\\pi, \\sigma={sigma}$"
 
     # --- State Preparation ---
     print("Preparing Wavepackets...")
