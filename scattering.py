@@ -9,8 +9,8 @@ from qiskit.synthesis import SuzukiTrotter
 from os import makedirs
 
 # Reuse the Ising W-state preparation as a base
-from wave_packet import prepare_w_state_circuit_ising
-from adapt_vqe import apply_adapt_vqe_layer, run_adapt_vqe
+from schwingerlib.wave_packet import prepare_w_state_circuit_ising
+from schwingerlib.adapt_vqe import apply_adapt_vqe_layer, run_adapt_vqe
 
 
 def get_schwinger_hamiltonian_obc(L, m0, g, w=1.0):
