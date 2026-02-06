@@ -2,7 +2,7 @@ import numpy as np
 from qiskit import QuantumCircuit
 
 
-def prepare_w_state_circuit(n_qubits, qubits, k0, x0, sigma):
+def prepare_w_state_circuit_ising(n_qubits, qubits, k0, x0, sigma):
     """
     Implements the unitary circuit to prepare a Wavepacket (W-state-like).
 
