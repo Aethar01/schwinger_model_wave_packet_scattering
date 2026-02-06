@@ -7,12 +7,11 @@ from qiskit.quantum_info import Statevector
 from qiskit.circuit.library import PauliEvolutionGate
 from qiskit.synthesis import SuzukiTrotter
 from os import makedirs
-from sys import argv
 
 # Import from split modules
-from ising import get_ising_hamiltonian_obc
-from wave_packet import prepare_w_state_circuit
-# from adapt_vqe import apply_adapt_vqe_layer
+from lib.ising import get_ising_hamiltonian_obc
+from lib.wave_packet import prepare_w_state_circuit
+from lib.adapt_vqe import apply_adapt_vqe_layer
 
 
 def run_simulation():
@@ -54,28 +53,26 @@ def run_simulation():
     qc_R = prepare_w_state_circuit(L, qubits_R, -k0, x_R_local, sigma)
     qc.compose(qc_R, inplace=True)
 
-    # if model_name == "Ising":
-    #     # ADAPT-VQE Parameters (Table VI, L=104, k0=0.32pi)
-    #     # These optimize the overlap with the single-particle eigenstate.
-    #     adapt_params = [
-    #         ("Y", 0.0191),
-    #         ("YZ", 0.0276),
-    #         ("Y", -0.4497),
-    #         ("ZXY", 0.0226),
-    #         ("YZ", 0.0618),
-    #         ("Y", 0.0000),
-    #         ("ZXY", -0.2238)
-    #     ]
-    #     print("Applying ADAPT-VQE cleaning layers...")
-    #     apply_adapt_vqe_layer(qc, L, adapt_params)
-    #
-    # # --- Vacuum Preparation ---
-    # print("Preparing Vacuum State...")
+    # ADAPT-VQE Parameters (Table VI, L=104, k0=0.32pi)
+    # These optimize the overlap with the single-particle eigenstate.
+    adapt_params = [
+        ("Y", 0.0191),
+        ("YZ", 0.0276),
+        ("Y", -0.4497),
+        ("ZXY", 0.0226),
+        ("YZ", 0.0618),
+        ("Y", 0.0000),
+        ("ZXY", -0.2238)
+    ]
+    print("Applying ADAPT-VQE cleaning layers...")
+    apply_adapt_vqe_layer(qc, L, adapt_params)
+
+    # --- Vacuum Preparation ---
+    print("Preparing Vacuum State...")
     vac_qc = QuantumCircuit(L)
-    # if model_name == "Ising":
-    #     # Apply the same ADAPT-VQE layer to |0...0> to prepare the approximate vacuum
-    #     # as described in the paper (Eq. 41/73 context).
-    #     apply_adapt_vqe_layer(vac_qc, L, adapt_params)
+    # Apply the same ADAPT-VQE layer to |0...0> to prepare the approximate vacuum
+    # as described in the paper (Eq. 41/73 context).
+    apply_adapt_vqe_layer(vac_qc, L, adapt_params)
 
     # --- Time Evolution ---
     psi = Statevector(qc)
