@@ -9,9 +9,9 @@ from qiskit.synthesis import SuzukiTrotter
 from os import makedirs
 
 # Import from split modules
-from lib.ising import get_ising_hamiltonian_obc
-from lib.wave_packet import prepare_w_state_circuit
-from lib.adapt_vqe import apply_adapt_vqe_layer
+from isinglib.ising import get_ising_hamiltonian_obc
+from isinglib.wave_packet import prepare_w_state_circuit
+from isinglib.adapt_vqe import apply_adapt_vqe_layer
 
 
 def run_simulation():
