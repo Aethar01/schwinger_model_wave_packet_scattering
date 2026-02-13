@@ -8,7 +8,6 @@ from qiskit.circuit.library import PauliEvolutionGate
 from qiskit.synthesis import SuzukiTrotter
 from os import makedirs
 
-# Reuse the Ising W-state preparation as a base
 from schwingerlib.wave_packet import prepare_w_state_circuit_ising
 from schwingerlib.adapt_vqe import apply_adapt_vqe_layer, run_adapt_vqe
 
@@ -91,9 +90,7 @@ def prepare_schwinger_wavepacket(L, qubits_indices, k0, x0, sigma):
     Prepares a Schwinger model wavepacket using the W-state strategy.
 
     Strategy:
-    1. The system has L staggered sites (L qubits).
-       Actually, standard notation: L spatial sites -> 2L staggered sites (qubits).
-       Let's assume the input L is the number of QUBITS (2 * Spatial Sites).
+    1. The system has L staggered sites and L/2 spatial sites (L qubits).
 
     2. We treat pairs (2i, 2i+1) as sites for the W-state.
        We select the even qubits [q0, q2, q4, ...] to prepare the W-state.
@@ -101,7 +98,7 @@ def prepare_schwinger_wavepacket(L, qubits_indices, k0, x0, sigma):
     3. Expand 1 -> 11: CNOT(2i, 2i+1).
 
     4. Apply X to all even sites to set the correct vacuum background.
-       (Assuming vacuum is |0101...> and 11 excitation becomes 01, 00 becomes 10).
+       (Vacuum approximation is |0101...> which will speed up VQE. 11 excitation becomes 01, 00 becomes 10).
     """
     qc = QuantumCircuit(L)
 
@@ -141,7 +138,7 @@ def run_simulation():
     print("Initializing Schwinger Model Hamiltonian...")
     H_op = get_schwinger_hamiltonian_obc(L, m0, g, w)
     save_dir = "schwinger"
-    title_str = f"Scattering in Schwinger Model (L={L})\\n$k_0={
+    title_str = f"Scattering in Schwinger Model (L={L}) \\n $k_0={
         k0/np.pi:.2f}\\pi, \\sigma={sigma}$"
 
     print("Preparing Wavepackets...")
